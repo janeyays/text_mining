@@ -12,7 +12,7 @@ lemmatizer = WordNetLemmatizer()
 
 
 def clean_text(text):
-    text = re.sub(r"[^a-z0-9\s\-]", " ", text)
+    text = re.sub(r"[^a-z0-9\s_\-]", " ", text)
     return text
 
 def tokenize(text):
