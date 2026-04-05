@@ -18,3 +18,8 @@ Data are fetched from the arXiv API (`http://export.arxiv.org/api/query`) by que
 
 - Raw API export: `data/arxiv_raw_metadata.csv`
 - Cleaned dataset: `data/arxiv_cleaned_metadata.csv`
+
+## Running the frontend
+- Download the model.safetensors, tokenizer.json, sokenizer_config.json from the group drive.
+- Paste inside the bert_multilabel folder
+- Run python app.py
