@@ -14,7 +14,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 MAX_LEN = 512
-BERT_THRESHOLD = 0.5
+BERT_THRESHOLD = 0.025
 
 KNOWN_LABELS = list(bert_model.config.id2label.values())
 
@@ -509,6 +509,7 @@ def home():
             }
 
             function openModal(data) {
+                allData = data;
                 tagState = {};
                 const predicted = data.predicted.map(p => p.label).filter(l => l !== '(no label predicted)');
                 const allLabels = Object.keys(data.all_scores);
@@ -542,7 +543,8 @@ def home():
                 const el = document.createElement('span');
                 el.className = 'tag ' + (tagState[label] ? 'selected' : 'unselected');
                 el.dataset.label = label;
-                el.innerHTML = label + '<span class="remove">&#x2715;</span>';
+                const score = allData.all_scores[label] || 0;
+                el.innerHTML = `${label} <span style="opacity: 0.6; font-size: 0.75em;">(${score})</span><span class="remove">&#x2715;</span>`;
                 el.onclick = () => toggleTag(el, label);
                 return el;
             }
