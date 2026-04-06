@@ -1,5 +1,15 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from bertopic_inference import BERTopicPredictor
+# predictor = BERTopicPredictor(model_dir="topic_analysis/BERTopic/bertopic_models/")
+import os
+
+# MODEL_DIR = r"C:\Users\ASUS\Y3S2 TEXT MINING\project\v2\text_mining\topic_analysis\BERTopic"    
+# predictor = BERTopicPredictor(model_dir=r"C:\Users\ASUS\Y3S2 TEXT MINING\project\v2\text_mining\topic_analysis\BERTopic\bertopic_models")
+
+_BASE = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(_BASE, "topic_analysis", "BERTopic", "bertopic_models")
+predictor = BERTopicPredictor(model_dir=MODEL_DIR)
 
 model_path = "bert_multilabel"
 
@@ -81,6 +91,7 @@ def home():
     <head>
         <title>Paper Classifier</title>
         <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -452,9 +463,12 @@ def home():
             <div class="pub-title" id="pub-title"></div>
             <div class="pub-abstract" id="pub-abstract"></div>
             <div class="pub-tags" id="pub-tags"></div>
-            <div class="pub-actions">
+            <div class="pub-actions" style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+                <button class="btn-secondary" id="view-trends-btn" onclick="openTrendModal()">View trend analysis</button>
+                <button class="btn-secondary" id="view-topic-btn" onclick="viewDominantTopic()">View dominant topic within the category</button>
                 <button class="btn-reset" onclick="resetAll()">Classify another paper</button>
             </div>
+            <div id="dominant-topics" style="margin-top:1rem;"></div>
         </div>
 
         <!-- Modal -->
@@ -477,6 +491,25 @@ def home():
                     <button class="btn-publish" onclick="publish()">Publish</button>
                 </div>
             </div>
+        </div>
+
+        <div class="overlay" id="trend-overlay" style="display:none; align-items:center; justify-content:center;">
+        <div class="modal" style="max-width:800px;">
+            <div class="modal-title">Trend analysis</div>
+            <div style="margin-bottom:8px;">
+            <label style="font-size:0.75rem;color:#6b6b64;">Level</label>
+            <select id="trend-level" style="margin-bottom:8px;">
+                <option value="category">Category (sum across topics)</option>
+                <option value="topic">Topic (per-topic trends)</option>
+            </select>
+            </div>
+            <div id="trend-cats" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">Loading categories...</div>
+            <div id="trend-status" style="margin-bottom:8px;"></div>
+            <canvas id="trend-canvas" height="250"></canvas>
+            <div class="modal-actions" style="margin-top:12px; justify-content:flex-end;">
+            <button class="btn-secondary" onclick="closeTrendModal()">Close</button>
+            </div>
+        </div>
         </div>
 
         <script>
@@ -567,6 +600,11 @@ def home():
                 const abstract = document.getElementById('abstract').value.trim();
                 const chosen = Object.keys(tagState).filter(l => tagState[l]);
 
+                // store for later use
+                window.publishedChosen = chosen;
+                window.publishedTitle = title;
+                window.publishedAbstract = abstract;
+
                 closeModal();
 
                 // Populate published card
@@ -585,6 +623,59 @@ def home():
                 document.getElementById('published-card').classList.add('active');
             }
 
+            async function viewDominantTopic() {
+                const chosen = window.publishedChosen || [];
+                if (!chosen.length) { alert('No categories selected'); return; }
+                const primary = chosen[0]; // primary category: first selected (change if you prefer a chooser)
+
+                const btn = document.getElementById('view-topic-btn');
+                btn.disabled = true;
+                const oldText = btn.textContent;
+                btn.textContent = 'Loading...';
+
+                try {
+                    const res = await fetch('/predict_topics', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            title: window.publishedTitle || '',
+                            abstract: window.publishedAbstract || '',
+                            subcategory: primary
+                        })
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const data = await res.json();
+                    renderDominantTopics(data);
+                } catch (err) {
+                    alert('Topic prediction failed: ' + err);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = oldText;
+                }
+            }
+
+            function renderDominantTopics(data) {
+                const container = document.getElementById('dominant-topics');
+                container.innerHTML = '';
+                const tops = data.top_topics || (data.topic_id ? [data] : []);
+                if (!tops || !tops.length) { container.textContent = 'No topic info available.'; return; }
+
+                const header = document.createElement('div');
+                header.className = 'section-label';
+                header.textContent = 'Top topics';
+                container.appendChild(header);
+
+                tops.forEach(t => {
+                    const box = document.createElement('div');
+                    box.style = 'margin-top:8px; padding:10px; border-radius:8px; background:#fff; border:0.5px solid #ddddd5;';
+                    const h = document.createElement('div'); h.style.fontWeight = '500'; h.textContent = `${t.label} (id ${t.topic_id}) — ${t.probability}`;
+                    const k = document.createElement('div'); k.style.marginTop = '5px'; k.textContent = 'Keywords: ' + (t.keywords || []).join(', ');
+                    box.appendChild(h);
+                    box.appendChild(k);
+                    container.appendChild(box);
+                });
+            }
+
             function resetAll() {
                 document.getElementById('title').value = '';
                 document.getElementById('abstract').value = '';
@@ -596,6 +687,85 @@ def home():
             document.getElementById('overlay').addEventListener('click', function(e) {
                 if (e.target === this) closeModal();
             });
+
+             let trendChart = null;
+            async function openTrendModal() {
+            document.getElementById('trend-overlay').style.display = 'flex';
+            document.getElementById('trend-cats').textContent = 'Loading...';
+            const res = await fetch('/trends');
+            const j = await res.json();
+            const cats = j.categories || [];
+            const container = document.getElementById('trend-cats');
+            container.innerHTML = '';
+            cats.forEach(c=>{
+                const btn = document.createElement('button');
+                btn.className = 'add-btn';
+                btn.style.padding = '6px 10px';
+                btn.textContent = c;
+                btn.onclick = ()=>loadTrend(c);
+                container.appendChild(btn);
+            });
+            }
+
+            function closeTrendModal(){
+            document.getElementById('trend-overlay').style.display = 'none';
+            if(trendChart) { trendChart.destroy(); trendChart = null; }
+            }
+
+            async function loadTrend(subcat){
+            const level = document.getElementById('trend-level').value || 'category';
+            document.getElementById('trend-status').textContent = 'Loading ' + level + ' trend for ' + subcat + ' ...';
+            const res = await fetch(`/trends?subcategory=${encodeURIComponent(subcat)}&level=${encodeURIComponent(level)}`);
+            if(!res.ok){ alert('No trend data'); document.getElementById('trend-status').textContent = ''; return; }
+            const data = await res.json();
+            renderTrendChart(data);
+            document.getElementById('trend-status').textContent = '';
+            }
+
+            function renderTrendChart(data){
+            const ctx = document.getElementById('trend-canvas').getContext('2d');
+            const years = data.years.map(String);
+            if(trendChart) trendChart.destroy();
+
+            if(data.level === 'category'){
+                trendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: years,
+                    datasets: [{
+                    label: data.subcategory,
+                    data: data.counts,
+                    borderColor: '#1a1a18',
+                    backgroundColor: 'rgba(26,26,24,0.06)',
+                    fill: true,
+                    tension: 0.2
+                    }]
+                },
+                options: { responsive: true, plugins:{legend:{display:true}} }
+                });
+                return;
+            }
+
+            // topic-level: plot each topic as a separate line (limit to top 6 by total to avoid clutter)
+            const topics = data.topics || [];
+            topics.sort((a,b)=> b.counts.reduce((s,x)=>s+x,0) - a.counts.reduce((s,x)=>s+x,0));
+            const top = topics.slice(0,6);
+            const palette = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b'];
+            const datasets = top.map((t,i)=>({
+                label: t.label || ('Topic ' + t.topic_id),
+                data: t.counts,
+                borderColor: palette[i%palette.length],
+                backgroundColor: palette[i%palette.length],
+                fill: false,
+                tension: 0.15
+            }));
+
+            trendChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: years, datasets },
+                options: { responsive:true, plugins:{legend:{position:'bottom'}} }
+            });
+            }
         </script>
     </body>
     </html>
@@ -621,6 +791,127 @@ def predict_form():
     results_html += "</ul>"
 
     return results_html + '<br><a href="/">Back</a>'
+
+@app.route("/predict_topics", methods=["POST"])
+def predict_topics():
+    data = request.get_json()
+    title = data.get("title", "")
+    abstract = data.get("abstract", "")
+    subcategory = data.get("subcategory", None)
+
+    if subcategory:
+        # Request full per-topic probabilities
+        single = predictor.predict(
+            title=title,
+            abstract=abstract,
+            subcategory=subcategory,
+            return_all_probs=True
+        )
+
+        # If we have a full probability vector, pick top-3 topics
+        if getattr(single, "all_probs", None):
+            sorted_probs = sorted(single.all_probs.items(), key=lambda x: -x[1])
+            top_k = sorted_probs[:3]
+            model = predictor.models.get(subcategory)
+            top_topics = []
+            for tid, prob in top_k:
+                tid = int(tid)
+                topic_info = model.get_topic_info()
+                label_row = topic_info[topic_info["Topic"] == tid]
+                label = label_row["Name"].values[0] if len(label_row) else str(tid)
+                raw_topic = model.get_topic(tid) if tid != -1 else []
+                keywords = [w for w, _ in raw_topic[: predictor.top_n_keywords]] if raw_topic else []
+                top_topics.append({
+                    "topic_id": tid,
+                    "label": label,
+                    "keywords": keywords,
+                    "probability": round(float(prob), 4),
+                    "is_outlier": (tid == -1)
+                })
+            return jsonify({"subcategory": subcategory, "top_topics": top_topics})
+
+        # Fallback: return single best topic (existing behavior)
+        return jsonify({
+            "subcategory": single.subcategory,
+            "topic_id": single.topic_id,
+            "label": single.topic_label,
+            "keywords": single.top_keywords,
+            "probability": round(single.probability, 4),
+            "is_outlier": single.is_outlier
+        })
+
+    # No subcategory: existing all-subcategories behavior
+    results = predictor.predict(title=title, abstract=abstract)
+    topics_json = {
+        sc: {
+            "topic_id": pred.topic_id,
+            "label": pred.topic_label,
+            "keywords": pred.top_keywords,
+            "probability": round(pred.probability, 4),
+            "is_outlier": pred.is_outlier
+        } for sc, pred in results.items()
+    }
+    return jsonify(topics_json)
+
+# Add to app.py
+@app.route("/trends", methods=["GET"])
+def trends():
+    import pandas as pd
+    csv_path = os.path.join(_BASE, "topic_analysis", "BERTopic", "csv_files", "all_subcategories_topic_trends_by_year.csv")
+    df = pd.read_csv(csv_path)
+    subcat = request.args.get("subcategory")        # e.g. econ.TH
+    level = request.args.get("level", "category")  # "category" or "topic"
+
+    if subcat is None:
+        cats = sorted(df["subcat"].dropna().unique().tolist())
+        return jsonify({"categories": cats})
+
+    df_sub = df[df["subcat"] == subcat]
+    if df_sub.empty:
+        return jsonify({"error": "no data for subcategory"}), 404
+
+    years = sorted(df_sub["published_year"].astype(int).unique().tolist())
+
+    if level == "category":
+        agg = df_sub.groupby("published_year")["doc_count"].sum().reindex(years, fill_value=0)
+        return jsonify({
+            "subcategory": subcat,
+            "level": "category",
+            "years": years,
+            "counts": [int(x) for x in agg.tolist()]
+        })
+
+    # topic-level: return per-topic counts plus human labels (if model available)
+    pivot = df_sub.pivot_table(
+        index="published_year",
+        columns="bertopic_topic_subcat",
+        values="doc_count",
+        aggfunc="sum",
+        fill_value=0
+    ).reindex(years, fill_value=0)
+
+    model = predictor.models.get(subcat)
+    labels_map = {}
+    if model is not None:
+        info = model.get_topic_info()
+        labels_map = {int(r["Topic"]): r["Name"] for _, r in info.iterrows()}
+
+    topics = []
+    for col in pivot.columns:
+        tid = int(col)
+        topics.append({
+            "topic_id": tid,
+            "label": labels_map.get(tid, f"Topic {tid}"),
+            "counts": [int(x) for x in pivot[col].tolist()]
+        })
+
+    return jsonify({
+        "subcategory": subcat,
+        "level": "topic",
+        "years": years,
+        "topics": topics
+    })
+
 
 if __name__ == "__main__":
     app.run(debug=True)

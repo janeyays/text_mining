@@ -6,7 +6,7 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Virtual env / env files
-venv/
+.venv/
 .env
 
 # LDA artifacts & caches
